@@ -209,5 +209,6 @@ jobs:
             --platform managed \
             --service-account "${{ env.RUNTIME_SA }}" \
             --allow-unauthenticated \
+            --no-invoker-iam-check \
             --quiet \
             --env-vars-file="cloudrun-env.yaml"
