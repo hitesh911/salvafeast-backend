@@ -1,0 +1,16 @@
+.venv
+.env
+.env.*
+!.env.example
+local_media
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.git
+.github
+*.md
+.DS_Store

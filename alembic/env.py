@@ -1,0 +1,50 @@
+import configparser
+from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import create_engine, pool
+
+from app.core.config import settings
+from app.db.base import Base
+import app.models  # noqa: F401 — register all models with Base.metadata
+
+config = context.config
+
+# Disable % interpolation so URL-encoded passwords (%40, etc.) are literal.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+    raw_ini = configparser.ConfigParser(interpolation=None)
+    raw_ini.read(config.config_file_name)
+    config.file_config = raw_ini
+
+db_url = settings.DATABASE_URL
+config.set_main_option("sqlalchemy.url", db_url)
+target_metadata = Base.metadata
+
+
+def run_migrations_offline() -> None:
+    context.configure(
+        url=db_url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    connectable = create_engine(db_url, poolclass=pool.NullPool)
+
+    with connectable.connect() as connection:
+        context.configure(connection=connection, target_metadata=target_metadata)
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()

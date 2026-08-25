@@ -1,0 +1,213 @@
+# Build, push, migrate, and deploy salva-backend to Cloud Run.
+#
+# Triggers: tag push (v*) or manual workflow_dispatch.
+#
+# Required GitHub Environment "production":
+#   Secrets: GCP_SA_KEY, GCP_PROJECT_ID
+#   Vars: app config for Cloud Run (DB_*, JWT_SECRET_KEY, SALVA_ENV=production,
+#         GCS_BUCKET_NAME, CONSUMER_WEB_BASE_URL, CORS_ALLOWED_ORIGINS, etc.)
+#         Do NOT set GCS_SERVICE_ACCOUNT_JSON_PATH — Cloud Run uses ADC.
+#         Optional: GCS_SIGNING_SERVICE_ACCOUNT = runtime SA email for V4 signed URLs.
+#
+# GCP: Artifact Registry repo, Cloud Run + Jobs IAM, runtime SA with DB + GCS
+#      (storage.objectAdmin) + iam.serviceAccounts.signBlob.
+
+name: Build, push, migrate, deploy backend to Cloud Run
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  GCP_REGION: asia-south1
+  GAR_REPOSITORY: salvafeast
+  IMAGE_NAME: salva-backend-api
+  CLOUD_RUN_SERVICE: salva-backend-api
+  MIGRATIONS_JOB: salva-migrations
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Docker auth for Artifact Registry
+        run: |
+          gcloud auth configure-docker "${{ env.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Build backend image
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}:${TAG_NAME}"
+          echo "IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
+
+          if [ -f "backend/Dockerfile" ]; then
+            DOCKERFILE_PATH="backend/Dockerfile"
+            BUILD_CONTEXT="backend"
+          elif [ -f "Dockerfile" ]; then
+            DOCKERFILE_PATH="Dockerfile"
+            BUILD_CONTEXT="."
+          else
+            echo "No Dockerfile found at backend/Dockerfile or ./Dockerfile"
+            exit 1
+          fi
+
+          echo "Using Dockerfile: ${DOCKERFILE_PATH}, context: ${BUILD_CONTEXT}"
+          docker build \
+            -f "${DOCKERFILE_PATH}" \
+            -t "${IMAGE}" \
+            "${BUILD_CONTEXT}"
+
+      - name: Push backend image
+        run: |
+          set -euo pipefail
+          docker push "${{ env.IMAGE }}"
+
+      - name: Tag as latest (optional)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          LATEST="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}:latest"
+          docker tag "${{ env.IMAGE }}" "${LATEST}"
+          docker push "${LATEST}"
+
+  migrate-and-deploy:
+    name: Run DB migrations (Cloud Run Job) and deploy Cloud Run service
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Build env vars file from GitHub environment vars
+        env:
+          VARS_JSON: ${{ toJSON(vars) }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+
+          vars_json = os.environ.get("VARS_JSON", "{}")
+          data = json.loads(vars_json) if vars_json else {}
+
+          with open("cloudrun-env.yaml", "w", encoding="utf-8") as f:
+              for k, v in sorted(data.items()):
+                  if v is None:
+                      continue
+                  s = str(v).replace('"', '\\"')
+                  f.write(f'{k}: "{s}"\n')
+          PY
+
+      - name: Resolve runtime service account from GCP_SA_KEY
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+
+          creds_path = os.environ.get("GOOGLE_GHA_CREDS_PATH") or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+          if not creds_path:
+              raise SystemExit("Could not find Google credentials path in environment")
+
+          with open(creds_path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          client_email = data.get("client_email")
+          if not client_email:
+              raise SystemExit("client_email not found in credentials JSON")
+
+          github_env = os.environ["GITHUB_ENV"]
+          with open(github_env, "a", encoding="utf-8") as f:
+              f.write(f"RUNTIME_SA={client_email}\n")
+          print(f"Using runtime service account: {client_email}")
+          PY
+
+      - name: Create or update migrations job
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}:${TAG_NAME}"
+          echo "Using image for migrations job: ${IMAGE}"
+
+          if gcloud run jobs describe "${{ env.MIGRATIONS_JOB }}" --region "${{ env.GCP_REGION }}" >/dev/null 2>&1; then
+            gcloud run jobs update "${{ env.MIGRATIONS_JOB }}" \
+              --image "${IMAGE}" \
+              --region "${{ env.GCP_REGION }}" \
+              --service-account "${{ env.RUNTIME_SA }}" \
+              --max-retries=0 \
+              --tasks=1 \
+              --env-vars-file="cloudrun-env.yaml" \
+              --command="alembic" \
+              --args="upgrade","head"
+          else
+            gcloud run jobs create "${{ env.MIGRATIONS_JOB }}" \
+              --image "${IMAGE}" \
+              --region "${{ env.GCP_REGION }}" \
+              --service-account "${{ env.RUNTIME_SA }}" \
+              --max-retries=0 \
+              --tasks=1 \
+              --env-vars-file="cloudrun-env.yaml" \
+              --command="alembic" \
+              --args="upgrade","head"
+          fi
+
+      - name: Run migrations via Cloud Run Job
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ env.MIGRATIONS_JOB }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --wait
+
+      - name: Deploy backend to Cloud Run
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}:${TAG_NAME}"
+
+          gcloud run deploy "${{ env.CLOUD_RUN_SERVICE }}" \
+            --image "${IMAGE}" \
+            --region "${{ env.GCP_REGION }}" \
+            --platform managed \
+            --service-account "${{ env.RUNTIME_SA }}" \
+            --allow-unauthenticated \
+            --quiet \
+            --env-vars-file="cloudrun-env.yaml"

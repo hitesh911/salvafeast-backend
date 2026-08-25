@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Invoice {{ invoice_number }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 12px; color: #222; margin: 40px; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .meta { margin-bottom: 24px; }
+    .meta p { margin: 2px 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #f5f5f5; }
+    .totals { margin-top: 24px; width: 320px; margin-left: auto; }
+    .totals td { border: none; padding: 4px 8px; }
+    .totals .label { text-align: right; font-weight: bold; }
+    .totals .grand { font-size: 14px; font-weight: bold; border-top: 2px solid #222; }
+  </style>
+</head>
+<body>
+  <h1>{{ outlet_name }}</h1>
+  <div class="meta">
+    {% if outlet_address %}<p>{{ outlet_address }}</p>{% endif %}
+    {% if outlet_phone %}<p>Phone: {{ outlet_phone }}</p>{% endif %}
+    {% if gst_number %}<p>GSTIN: {{ gst_number }}</p>{% endif %}
+    <p><strong>Invoice:</strong> {{ invoice_number }}</p>
+    <p><strong>Date:</strong> {{ generated_date }}</p>
+    {% if order_id %}<p><strong>Order ID:</strong> {{ order_id }}</p>{% endif %}
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>Qty</th>
+        <th>Unit Price</th>
+        <th>Line Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for line in line_items %}
+      <tr>
+        <td>{{ line.name }}</td>
+        <td>{{ line.quantity }}</td>
+        <td>{{ line.unit_price }}</td>
+        <td>{{ line.line_total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <table class="totals">
+    <tr><td class="label">Subtotal</td><td>{{ subtotal_amount }}</td></tr>
+    <tr><td class="label">Discount</td><td>{{ discount_amount }}</td></tr>
+    <tr><td class="label">Taxable Amount</td><td>{{ taxable_amount }}</td></tr>
+    <tr><td class="label">CGST</td><td>{{ cgst_amount }}</td></tr>
+    <tr><td class="label">SGST</td><td>{{ sgst_amount }}</td></tr>
+    <tr class="grand"><td class="label">Total</td><td>{{ total_amount }}</td></tr>
+  </table>
+</body>
+</html>
