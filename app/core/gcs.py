@@ -130,6 +130,83 @@ def _public_gcs_url(blob_name: str) -> str:
     return f"https://storage.googleapis.com/{settings.GCS_BUCKET_NAME}/{blob_name}"
 
 
+def gcs_public_url_prefix() -> str:
+    bucket = settings.GCS_BUCKET_NAME.strip()
+    if not bucket:
+        return ""
+    return f"https://storage.googleapis.com/{bucket}/"
+
+
+def blob_name_from_media_url(url: str | None) -> str | None:
+    """Extract object path from a GCS public URL or our /public/media proxy URL."""
+    if not url:
+        return None
+    clean = url.split("?", 1)[0].strip()
+    prefix = gcs_public_url_prefix()
+    if prefix and clean.startswith(prefix):
+        return clean[len(prefix) :].lstrip("/")
+
+    marker = "/api/v1/public/media/"
+    idx = clean.find(marker)
+    if idx != -1:
+        return clean[idx + len(marker) :].lstrip("/")
+    return None
+
+
+def rewrite_gcs_url_for_client(url: str, api_base: str) -> str:
+    """
+    Org policy blocks public bucket ACLs, so browsers cannot load storage.googleapis.com
+    URLs. Rewrite them to the authenticated-backend media proxy (still unauthenticated
+    HTTP GET — access is via unguessable object paths).
+    """
+    blob_name = blob_name_from_media_url(url)
+    if not blob_name:
+        return url
+    # Already a proxy URL pointing at this API — leave as-is (preserve query string).
+    if "/api/v1/public/media/" in url.split("?", 1)[0] and api_base and url.startswith(
+        api_base.rstrip("/")
+    ):
+        return url
+
+    base = api_base.rstrip("/")
+    path = quote(blob_name, safe="/")
+    suffix = ""
+    if "?" in url:
+        suffix = "?" + url.split("?", 1)[1]
+    return f"{base}/api/v1/public/media/{path}{suffix}"
+
+
+def rewrite_gcs_urls_in_text(text: str, api_base: str) -> str:
+    prefix = gcs_public_url_prefix()
+    if not prefix or prefix not in text or not api_base.strip():
+        return text
+    # Replace bare GCS prefix; blob paths stay as stored (may include %20 etc.).
+    media_base = api_base.rstrip("/") + "/api/v1/public/media/"
+    return text.replace(prefix, media_base)
+
+
+def open_gcs_blob(blob_name: str):
+    """Return (blob, content_type) after existence check."""
+    if ".." in blob_name or blob_name.startswith(("/", "\\")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path")
+    normalized = blob_name.lstrip("/")
+    if not normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path")
+
+    if not use_object_storage():
+        path = local_media_root() / normalized
+        if not path.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        return path, None
+
+    _, bucket = _get_gcs_client_and_bucket()
+    blob = bucket.blob(normalized)
+    if not blob.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    blob.reload()
+    return blob, (blob.content_type or "application/octet-stream")
+
+
 def _public_api_base_url() -> str:
     base = settings.LOCAL_MEDIA_BASE_URL.rstrip("/")
     suffix = "/local-media"
@@ -250,14 +327,16 @@ def fetch_stored_bytes(url: str | None) -> bytes | None:
             return path.read_bytes()
         return None
 
-    bucket = settings.GCS_BUCKET_NAME
-    gcs_prefix = f"https://storage.googleapis.com/{bucket}/" if bucket else ""
-    if bucket and clean.startswith(gcs_prefix):
+    blob_name = blob_name_from_media_url(clean)
+    if blob_name:
         try:
             if use_object_storage():
-                blob_name = clean[len(gcs_prefix) :]
                 _, gcs_bucket = _get_gcs_client_and_bucket()
                 return gcs_bucket.blob(blob_name).download_as_bytes()
+            path = local_media_root() / blob_name
+            if path.is_file():
+                return path.read_bytes()
+            return None
         except HTTPException:
             pass
         except Exception:

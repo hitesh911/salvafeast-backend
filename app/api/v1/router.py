@@ -4,6 +4,7 @@ from app.api.v1 import analytics, auth, billing, customers, health, menu, offers
 from app.api.v1.public.content_posts import router as public_content_posts_router
 from app.api.v1.public.users import router as public_users_router
 from app.api.v1.public.menu import router as public_menu_router
+from app.api.v1.public.media import router as public_media_router
 from app.api.v1.public.orders import router as public_orders_router
 from app.api.v1.public.outlets import router as public_outlets_router
 
@@ -22,6 +23,7 @@ api_router.include_router(payment_settings.router)
 api_router.include_router(customers.router)
 api_router.include_router(outlet_settings.router)
 api_router.include_router(outlet_subscription.router)
+api_router.include_router(public_media_router, prefix="/public")
 api_router.include_router(public_menu_router, prefix="/public")
 api_router.include_router(public_orders_router, prefix="/public")
 api_router.include_router(public_users_router, prefix="/public")

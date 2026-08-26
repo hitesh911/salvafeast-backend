@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     GCS_SIGNING_SERVICE_ACCOUNT: str = ""
     GCS_SIGNED_URL_EXPIRE_MINUTES: int = 15
 
+    # Public API origin used to rewrite private GCS object URLs into /api/v1/public/media/...
+    # Example: https://salva-backend-api-xxxx.run.app  (no trailing slash)
+    API_PUBLIC_BASE_URL: str = ""
+
     # Local disk media when SALVA_ENV=local (no GCS)
     LOCAL_MEDIA_DIR: str = "local_media"
     LOCAL_MEDIA_BASE_URL: str = "http://localhost:8000/local-media"
