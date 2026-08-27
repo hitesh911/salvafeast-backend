@@ -31,6 +31,9 @@ __all__ = [
     "OrderSummaryResponse",
     "PaginatedOrderSummaries",
     "OrderDetailResponse",
+    "PublicOrderItemAddonStatus",
+    "PublicOrderItemStatus",
+    "PublicOrderStatusResponse",
     "OrderStatusUpdate",
     "PaymentStatusUpdate",
     "ConfirmPaymentRequest",
@@ -160,11 +163,17 @@ class OrderPlacementResponse(BaseModel):
     tracking_token: str
 
 
+class PublicOrderItemAddonStatus(BaseModel):
+    addon_id: UUID
+
+
 class PublicOrderItemStatus(BaseModel):
     menu_item_id: UUID
+    variant_id: UUID | None = None
     quantity: int
     item_price_at_order: Decimal
     notes: str | None = None
+    addons: list[PublicOrderItemAddonStatus] = []
 
 
 class PublicOrderStatusResponse(BaseModel):

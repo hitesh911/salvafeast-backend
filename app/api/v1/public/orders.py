@@ -18,6 +18,7 @@ from app.schemas.order import (
     OrderPlacementRequest,
     OrderPlacementResponse,
     OrderStatusLogResponse,
+    PublicOrderItemAddonStatus,
     PublicOrderItemStatus,
     PublicOrderStatusResponse,
 )
@@ -146,6 +147,21 @@ def _authorize_consumer_order(
     )
 
 
+def _load_public_order(db: Session, order_id: UUID) -> Order:
+    order = (
+        db.query(Order)
+        .options(
+            selectinload(Order.table),
+            selectinload(Order.items).selectinload(OrderItem.addons),
+        )
+        .filter(Order.id == order_id)
+        .first()
+    )
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    return order
+
+
 def _build_public_order_status(order: Order, db: Session) -> PublicOrderStatusResponse:
     queue = build_order_queue_info(db, order)
     outlet = db.query(Outlet).filter(Outlet.id == order.outlet_id).first()
@@ -163,9 +179,13 @@ def _build_public_order_status(order: Order, db: Session) -> PublicOrderStatusRe
         items=[
             PublicOrderItemStatus(
                 menu_item_id=item.menu_item_id,
+                variant_id=item.variant_id,
                 quantity=item.quantity,
                 item_price_at_order=item.item_price_at_order,
                 notes=item.notes,
+                addons=[
+                    PublicOrderItemAddonStatus(addon_id=a.addon_id) for a in item.addons
+                ],
             )
             for item in order.items
         ],
@@ -264,18 +284,6 @@ def place_order(
         upi_payment_link=upi_link,
         tracking_token=tracking_token,
     )
-
-
-def _load_public_order(db: Session, order_id: UUID) -> Order:
-    order = (
-        db.query(Order)
-        .options(selectinload(Order.table), selectinload(Order.items))
-        .filter(Order.id == order_id)
-        .first()
-    )
-    if order is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
-    return order
 
 
 @router.get("/{slug}/orders/{order_id}", response_model=PublicOrderStatusResponse)

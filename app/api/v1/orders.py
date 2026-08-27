@@ -3,6 +3,8 @@ from typing import Union
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.v1.deps import require_outlet_permission
@@ -40,6 +42,19 @@ from app.services.orders import (
 )
 
 router = APIRouter(prefix="/outlets/{outlet_id}", tags=["orders"])
+
+_ACTIVE_BOARD_STATUSES = [
+    OrderStatus.payment_review,
+    OrderStatus.placed,
+    OrderStatus.accepted,
+    OrderStatus.preparing,
+    OrderStatus.ready,
+    OrderStatus.served,
+]
+
+
+class OrderBoardVersionResponse(BaseModel):
+    version: str
 
 
 def _get_order(db: Session, outlet_id: UUID, order_id: UUID) -> Order:
@@ -202,9 +217,31 @@ def _order_to_summary(order: Order) -> OrderSummaryResponse:
     )
 
 
+@router.get("/orders/board-version", response_model=OrderBoardVersionResponse)
+def get_order_board_version(
+    outlet_id: UUID,
+    db: Session = Depends(get_db),
+    _user=Depends(require_outlet_permission("orders.view")),
+):
+    max_updated, count = (
+        db.query(func.max(Order.updated_at), func.count(Order.id))
+        .filter(
+            Order.outlet_id == outlet_id,
+            Order.status.in_(_ACTIVE_BOARD_STATUSES),
+        )
+        .one()
+    )
+    stamp = max_updated.isoformat() if max_updated is not None else "none"
+    return OrderBoardVersionResponse(version=f"{stamp}:{count}")
+
+
 @router.get(
     "/orders",
-    response_model=Union[list[OrderSummaryResponse], PaginatedOrderSummaries],
+    response_model=Union[
+        list[OrderSummaryResponse],
+        list[OrderDetailResponse],
+        PaginatedOrderSummaries,
+    ],
 )
 def list_orders(
     outlet_id: UUID,
@@ -215,12 +252,22 @@ def list_orders(
     statuses: list[OrderStatus] | None = Query(default=None),
     page: int | None = Query(default=None, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    include_items: bool = Query(default=False),
     db: Session = Depends(get_db),
     _user=Depends(require_outlet_permission("orders.view")),
 ):
+    load_options = [selectinload(Order.table)]
+    if include_items:
+        load_options.extend(
+            [
+                selectinload(Order.items).selectinload(OrderItem.addons),
+                selectinload(Order.status_logs),
+            ]
+        )
+
     query = (
         db.query(Order)
-        .options(selectinload(Order.table))
+        .options(*load_options)
         .filter(Order.outlet_id == outlet_id)
     )
     if status_filter is not None:
@@ -249,6 +296,8 @@ def list_orders(
         )
 
     orders = query.order_by(Order.created_at.desc()).all()
+    if include_items:
+        return [_build_order_detail(order) for order in orders]
     return [_order_to_summary(order) for order in orders]
 
 
