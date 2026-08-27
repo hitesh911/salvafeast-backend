@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -177,12 +178,28 @@ def rewrite_gcs_url_for_client(url: str, api_base: str) -> str:
 
 
 def rewrite_gcs_urls_in_text(text: str, api_base: str) -> str:
+    """
+    Rewrite plain GCS object URLs to the media proxy for browser <img> loads.
+
+    Do NOT rewrite V4 signed URLs (upload PUTs). Those must stay on
+    storage.googleapis.com; rewriting them to /public/media causes 405s.
+    """
     prefix = gcs_public_url_prefix()
     if not prefix or prefix not in text or not api_base.strip():
         return text
-    # Replace bare GCS prefix; blob paths stay as stored (may include %20 etc.).
+
     media_base = api_base.rstrip("/") + "/api/v1/public/media/"
-    return text.replace(prefix, media_base)
+    # Match GCS URLs inside JSON strings (stop at quote / whitespace / backslash).
+    pattern = re.compile(re.escape(prefix) + r'[^\s"\\]+')
+
+    def _replace(match: re.Match[str]) -> str:
+        url = match.group(0)
+        # Signed upload/download URLs must not be rewritten.
+        if "X-Goog-Algorithm" in url or "X-Goog-Signature" in url:
+            return url
+        return url.replace(prefix, media_base, 1)
+
+    return pattern.sub(_replace, text)
 
 
 def open_gcs_blob(blob_name: str):
