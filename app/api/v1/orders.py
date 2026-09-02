@@ -36,6 +36,7 @@ from app.services.order_status import validate_status_transition
 from app.services.orders import (
     OrderItemInput,
     create_order,
+    order_customer_display,
     resolve_staff_user_id,
     resolve_table_id_for_outlet,
     validate_order_type_and_table,
@@ -78,6 +79,7 @@ def _load_order_detail(db: Session, outlet_id: UUID, order_id: UUID) -> Order:
             selectinload(Order.items).selectinload(OrderItem.addons),
             selectinload(Order.status_logs),
             selectinload(Order.table),
+            selectinload(Order.user),
         )
         .filter(Order.id == order_id, Order.outlet_id == outlet_id)
         .first()
@@ -89,6 +91,7 @@ def _load_order_detail(db: Session, outlet_id: UUID, order_id: UUID) -> Order:
 
 def _build_order_detail(order: Order) -> OrderDetailResponse:
     table_number = order.table.table_number if order.table else None
+    guest_name, guest_phone = order_customer_display(order)
     return OrderDetailResponse(
         id=order.id,
         outlet_id=order.outlet_id,
@@ -103,8 +106,8 @@ def _build_order_detail(order: Order) -> OrderDetailResponse:
         payment_status=order.payment_status,
         payment_method=order.payment_method,
         payment_collection=order.payment_collection,
-        guest_name=order.guest_name,
-        guest_phone=order.guest_phone,
+        guest_name=guest_name,
+        guest_phone=guest_phone,
         cancelled_by=order.cancelled_by,
         cancel_requested_at=order.cancel_requested_at,
         cancel_request_status=order.cancel_request_status,
@@ -192,6 +195,7 @@ def create_staff_order(
 
 
 def _order_to_summary(order: Order) -> OrderSummaryResponse:
+    guest_name, guest_phone = order_customer_display(order)
     return OrderSummaryResponse(
         id=order.id,
         outlet_id=order.outlet_id,
@@ -206,8 +210,8 @@ def _order_to_summary(order: Order) -> OrderSummaryResponse:
         payment_status=order.payment_status,
         payment_method=order.payment_method,
         payment_collection=order.payment_collection,
-        guest_name=order.guest_name,
-        guest_phone=order.guest_phone,
+        guest_name=guest_name,
+        guest_phone=guest_phone,
         cancelled_by=order.cancelled_by,
         cancel_requested_at=order.cancel_requested_at,
         cancel_request_status=order.cancel_request_status,
@@ -256,7 +260,7 @@ def list_orders(
     db: Session = Depends(get_db),
     _user=Depends(require_outlet_permission("orders.view")),
 ):
-    load_options = [selectinload(Order.table)]
+    load_options = [selectinload(Order.table), selectinload(Order.user)]
     if include_items:
         load_options.extend(
             [

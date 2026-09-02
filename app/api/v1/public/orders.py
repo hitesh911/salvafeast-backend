@@ -31,6 +31,7 @@ from app.services.order_queue import build_order_queue_info
 from app.services.orders import (
     OrderItemInput,
     create_order,
+    resolve_order_customer_contact,
     resolve_table_for_outlet,
     validate_order_type_and_table,
 )
@@ -215,9 +216,6 @@ def place_order(
     validate_order_type_and_table(payload.order_type, table_id)
 
     user_id: UUID | None = None
-    guest_name = payload.guest_name
-    guest_phone = payload.guest_phone
-
     if outlet.require_customer_login:
         if optional_user is None:
             raise HTTPException(
@@ -226,10 +224,14 @@ def place_order(
                 headers={"WWW-Authenticate": "Bearer"},
             )
         user_id = optional_user.id
-        guest_name = None
-        guest_phone = None
     elif optional_user is not None:
         user_id = optional_user.id
+
+    guest_name, guest_phone = resolve_order_customer_contact(
+        optional_user,
+        payload.guest_name,
+        payload.guest_phone,
+    )
 
     items_input = [
         OrderItemInput(

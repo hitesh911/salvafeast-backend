@@ -27,6 +27,37 @@ from app.services.offers import (
 )
 
 
+def _clean_contact(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def resolve_order_customer_contact(
+    user: User | None,
+    guest_name: str | None,
+    guest_phone: str | None,
+) -> tuple[str | None, str | None]:
+    """Snapshot customer name/phone on the order from guest fields and/or user profile."""
+    name = _clean_contact(guest_name)
+    phone = _clean_contact(guest_phone)
+    if user is None:
+        return name, phone
+    if not name:
+        name = _clean_contact(user.name)
+    if not phone:
+        phone = _clean_contact(user.phone)
+    return name, phone
+
+
+def order_customer_display(order: Order) -> tuple[str | None, str | None]:
+    """Resolve name/phone for staff views, falling back to the linked user."""
+    return resolve_order_customer_contact(
+        order.user, order.guest_name, order.guest_phone
+    )
+
+
 def build_upi_payment_link(outlet: Outlet, order: Order) -> str | None:
     if not outlet.upi_vpa:
         return None

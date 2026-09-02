@@ -18,6 +18,7 @@ from app.schemas.customer import (
 from app.schemas.outlet_settings import OutletCustomerUpdate
 from app.schemas.order import OrderSummaryResponse
 from app.services.customers import get_outlet_customer, list_outlet_customers
+from app.services.orders import order_customer_display
 
 router = APIRouter(prefix="/outlets/{outlet_id}", tags=["customers"])
 
@@ -39,7 +40,7 @@ def _to_list_item(outlet_customer: OutletCustomer) -> OutletCustomerListItem:
 def _load_user_orders(db: Session, outlet_id: UUID, user_id: UUID) -> list[Order]:
     return (
         db.query(Order)
-        .options(selectinload(Order.table))
+        .options(selectinload(Order.table), selectinload(Order.user))
         .filter(Order.outlet_id == outlet_id, Order.user_id == user_id)
         .order_by(Order.created_at.desc())
         .all()
@@ -47,6 +48,7 @@ def _load_user_orders(db: Session, outlet_id: UUID, user_id: UUID) -> list[Order
 
 
 def _order_to_summary(order: Order) -> OrderSummaryResponse:
+    guest_name, guest_phone = order_customer_display(order)
     return OrderSummaryResponse(
         id=order.id,
         outlet_id=order.outlet_id,
@@ -60,8 +62,8 @@ def _order_to_summary(order: Order) -> OrderSummaryResponse:
         total_amount=order.total_amount,
         payment_status=order.payment_status,
         payment_method=order.payment_method,
-        guest_name=order.guest_name,
-        guest_phone=order.guest_phone,
+        guest_name=guest_name,
+        guest_phone=guest_phone,
         created_at=order.created_at,
         updated_at=order.updated_at,
         table_number=order.table.table_number if order.table else None,
